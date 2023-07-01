@@ -1,0 +1,8 @@
+tests/
+.venvLPREpy/
+.venv/
+.idea/
+dist/
+build/
+*.egg-info
+*.docx
