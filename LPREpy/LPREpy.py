@@ -365,12 +365,12 @@ class LPREpy:
         self.current_unit = uni
 
         self.axis_inner_contour, self.profile_inner_contour = self.InnerContour.Inner_Profile(
-                dc=self.dc, dt=self.dt, Lcarac=self.Lcarac, kappa=self.kappa,
-                gam=self.gam_main, Me=self.M[2], aeat=self.aeat, dx=self.dx,
-                ite=self.ite, erro=self.error, Tn=self.Tn,
-                method=self.method_nozzle, moccond=self.moccond,
-                uni=self.geometry_length_unit
-            )
+            dc=self.dc, dt=self.dt, Lcarac=self.Lcarac, kappa=self.kappa,
+            gam=self.gam_main, Me=self.M[2], aeat=self.aeat, dx=self.dx,
+            ite=self.ite, erro=self.error, Tn=self.Tn,
+            method=self.method_nozzle, moccond=self.moccond,
+            uni=self.geometry_length_unit
+        )
 
         return self.axis_inner_contour, self.profile_inner_contour
 
@@ -387,6 +387,7 @@ class InnerProfile:
         self.nozzle_profile = None
         self.inner_contour_axis = None
         self.inner_contour_profile = None
+
     # ****************************************** ARCs functions ******************************************
     def Calc_Arcos(self, r, yo, yf, H, xo, dx, quadrante, iteracoes, erro):
         b = yo - r
@@ -823,3 +824,80 @@ class InnerProfile:
             axis_contour[i] = axis_contour[i] * uni_c
             profile_contour[i] = profile_contour[i] * uni_c
         return axis_contour, profile_contour
+
+
+class Lcarac:
+    def __init__(self):
+        self.v_inj = None
+
+    def __int__(self):
+        # Parametros já fornecidos
+        self.Pc = 0
+        # parametros do injetor
+
+        # PARAMETROS CALCULADOS
+        self.gamma_c = 0
+        self.gamma_t = 0
+        self.gamma_e = 0
+        self.v_c = 0
+        self.v_t = 0
+        self.v_e = 0
+        self.cp_c = 0
+        self.cp_t = 0
+        self.cp_e = 0
+        self.T_c = 0 # T_g, temperatura do gás
+        self.pho_c = 0
+        self.Ac = 0
+        self.m_dot = 0
+        self.Pr = 0
+        # PARAMETROS NOVOS
+        self.st = 0
+        self.vis_cin = 0
+        self.cp = 0
+        self.ro = 0
+        self.Qb = 0
+        self.Cv = 0
+        self.T_s = 0
+        self.wox = 0
+        self.rox = 0
+    def Dp(self, cond='L'):
+        cond = cond.lower()
+        if cond == 'l':
+            return 80*np.sqrt(10*self.Pc)
+        elif cond == 'g':
+            return 40*np.sqrt(10*self.Pc)
+        else:
+            return 80 * np.sqrt(10 * self.Pc)
+
+    def SMD(self):
+        Dp = self.Dp()**(-0.4)
+        return 7.3*(self.st ** 0.6)*(self.vis_cin ** 0.2)*(self.m_dot ** 0.25)*Dp
+
+    def Bt(self, ):
+        return self.cp * ((self.T_c - self.T_s) / self.Qb)
+
+    def B(self, ):
+        termo = (self.Cv*self.wox)/(self.rox*self.Qb)
+        return termo + self.Bt()
+
+    def Sr(self, ):
+        return (9*self.Pr)/(np.log(1+self.B()))
+
+    def Xo(self):
+        return self.v_inj/self.v_t
+
+
+    def E_aster(self):
+        sr = self.Sr()
+        xo = self.Xo()
+        return (xo+0.3*sr)/(2+sr)
+
+    def Lcarac(self):
+        ro = self.SMD()/2
+        Gc = self.m_dot/self.Ac
+        termo1_gama = (self.gamma_c-1)/(self.gamma_c+1)
+        termo2_gama = (self.gamma_c+1)/(2*self.gamma_c-2)
+        termo3_gama = 2/(self.gamma_c+1)
+        termo1 = Gc/(self.pho_c*np.sqrt(self.gamma_c*self.R*self.T_c))
+        termo2 = ((self.cp_c*self.pho_l)/self.ct_c)
+        termo3 = ((np.sqrt(self.gamma_c*self.R*self.T_c))
