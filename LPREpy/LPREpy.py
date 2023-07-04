@@ -827,39 +827,38 @@ class InnerProfile:
 
 
 class Lcarac:
-    def __init__(self):
-        self.v_inj = None
-
-    def __int__(self):
-        # Parametros já fornecidos
-        self.Pc = 0
+    def __int__(self, cea_p):
+        # constantes universais
+        self.R_uni = 8.314  # J/mol K   # universal constant of the perfect gases
+        # Parâmetros já fornecidos
+        self.Pc = 0                     # chamber pressure, Pa
         # parametros do injetor
-
+        self.v_inj = 0                  # injection velocity of injector
         # PARAMETROS CALCULADOS
-        self.gamma_c = 0
-        self.gamma_t = 0
-        self.gamma_e = 0
-        self.v_c = 0
-        self.v_t = 0
-        self.v_e = 0
-        self.cp_c = 0
-        self.cp_t = 0
-        self.cp_e = 0
-        self.T_c = 0 # T_g, temperatura do gás
-        self.pho_c = 0
-        self.Ac = 0
-        self.m_dot = 0
-        self.Pr = 0
+        self.gamma_c = cea_p[0]                # gamma in the combustion chamber
+        self.v_t = cea_p[1]                  # gas velocity at the throat
+        self.cp_c = cea_p[2]                   # specific heat at constant pressure of the combustion chamber
+        self.T_c = cea_p[3]                   # T_g, gas temperature
+        self.k_c = cea_p[4]                    # thermal conductivity of combustion chamber
+        self.pho_c = cea_p[5]                  # gas specific mass of combustion chamber
+        self.Ac = cea_p[6]                     # cross-sectional area of the combustion chamber
+        self.m_dot = cea_p[7]                  # mass flow in the combustion chamber
+        self.Pr = cea_p[8]                     # Prandtl number in the combustion chamber
         # PARAMETROS NOVOS
-        self.st = 0
-        self.vis_cin = 0
-        self.cp = 0
-        self.ro = 0
-        self.Qb = 0
-        self.Cv = 0
-        self.T_s = 0
-        self.wox = 0
-        self.rox = 0
+        self.pho_l = 0                  # liquid density
+        self.st = 0                     # superficial tension
+        self.vis_cin = 0                # cinematic viscosity                 #
+        self.Qb = 0                     # heat (enthalpy) of formation
+        self.Cv = 0                     # calorific power
+        self.T_s = 0                    # boiling temperature
+        self.mm = 0                     # molecular mass
+        self.R = self.R_uni/self.mm     # gas constant
+        self.wox = 0                    # oxygen concentration
+        self.rox = 0                    # mass oxygen of the mixture
+        # to be calculated
+        self.ro = 0                     # initial radius of the drop
+        self.smd = 0                    # Sauter mean diameter
+
     def Dp(self, cond='L'):
         cond = cond.lower()
         if cond == 'l':
@@ -870,34 +869,47 @@ class Lcarac:
             return 80 * np.sqrt(10 * self.Pc)
 
     def SMD(self):
-        Dp = self.Dp()**(-0.4)
-        return 7.3*(self.st ** 0.6)*(self.vis_cin ** 0.2)*(self.m_dot ** 0.25)*Dp
+        dp = self.Dp()**(-0.4)
+        self.smd = 7.3*(self.st ** 0.6)*(self.vis_cin ** 0.2)*(self.m_dot ** 0.25)*dp
+        return self.smd
 
-    def Bt(self, ):
-        return self.cp * ((self.T_c - self.T_s) / self.Qb)
+    def Bt(self):
+        return self.cp_c * ((self.T_c - self.T_s) / self.Qb)
 
-    def B(self, ):
+    def B(self):
         termo = (self.Cv*self.wox)/(self.rox*self.Qb)
         return termo + self.Bt()
 
-    def Sr(self, ):
+    def Sr(self):
         return (9*self.Pr)/(np.log(1+self.B()))
 
     def Xo(self):
         return self.v_inj/self.v_t
 
-
-    def E_aster(self):
+    def E_star(self):
         sr = self.Sr()
         xo = self.Xo()
         return (xo+0.3*sr)/(2+sr)
 
-    def Lcarac(self):
+    def l_star(self):
         ro = self.SMD()/2
-        Gc = self.m_dot/self.Ac
+
+        g_c = self.m_dot / self.Ac
+
         termo1_gama = (self.gamma_c-1)/(self.gamma_c+1)
+
         termo2_gama = (self.gamma_c+1)/(2*self.gamma_c-2)
+
         termo3_gama = 2/(self.gamma_c+1)
-        termo1 = Gc/(self.pho_c*np.sqrt(self.gamma_c*self.R*self.T_c))
-        termo2 = ((self.cp_c*self.pho_l)/self.ct_c)
-        termo3 = ((np.sqrt(self.gamma_c*self.R*self.T_c))
+
+        termo1 = self.E_star() * (ro ** 2)
+
+        termo2 = g_c / (self.pho_c * np.sqrt(self.gamma_c * self.R * self.T_c))
+
+        termo3 = ((self.cp_c*self.pho_l) / self.k_c)
+
+        termo4 = np.sqrt(self.gamma_c*self.R*self.T_c)/np.log(1+self.B())
+
+        l_star = termo1 * ((termo3_gama + (termo2 ** 2) * termo1_gama) ** termo2_gama)*termo3*termo4
+
+        return l_star

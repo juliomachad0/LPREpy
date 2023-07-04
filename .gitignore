@@ -1,8 +1,9 @@
-tests/
+Tests/
 .venvLPREpy/
 .venv/
 .idea/
 dist/
 build/
+/LPREpy/__pycache__
 *.egg-info
 *.docx
