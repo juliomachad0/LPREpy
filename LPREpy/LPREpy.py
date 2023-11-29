@@ -1,12 +1,13 @@
 from CEApy import CEA
 import logging as log
 import numpy as np
-
-log.basicConfig()
+log.basicConfig(level=log.INFO)
 
 
 class LPREpy:
-    def __init__(self, name="LPRE_analysis", dx=0.001, iterations=1000, error=10 ** (-5), output_geo_len_uni='mm'):
+    def __init__(self, name="LPREpy_Engine", dx=0.001, iterations=1000, error=10 ** (-5), output_geo_len_uni='mm'):
+        log.info("\n\nLPRE - Analysis of : {}".format(name))
+        log.info("Liquid Propellant Rocket Engine Python Library (LPREpy) - Design of LREs")
         log.info("LPREpy: checkout instructions at: https://github.com/juliomachad0/LPREpy")
         log.info("LPREpy: Input units always in SI")
         self.name = name
@@ -27,7 +28,7 @@ class LPREpy:
         self.pe = 0  # exit pressure - pe
         # condition of pe: default (0 - vacuum), user defined or calculated by CEA
         self.pe_condi = 'default'
-        self.cf = 0  # thrust coefficient
+        self.cf = None  # thrust coefficient
         self.efi_cf = 0.98  # eficiência do coeficiente de empuxo
         self.cf_esti = 0
         # chamber geometry parameters
@@ -39,10 +40,15 @@ class LPREpy:
         self.y = 0  # height of the junction between R2 and R1 arc
         self.kappa = 1.5  # ratio of the R2 and R1 arc, kappa = R2/R1
         self.Lcarac = 0  # characteristic length
+        # main diameters
         self.dc = 0  # chamber diameter
         self.dt = 0  # throat diameter
         self.de = 0  # nozzle exit diameter
-
+        # flow rate
+        self.M_dot_total = None
+        self.M_dot_ox = None
+        self.M_dot_fuel = None
+        # nozzle geometry parameters
         self.Tn = 0.2  # Tn = Rn/Rt
         self.Rn = 0
         self.gam_ari_mean = 0
@@ -56,12 +62,15 @@ class LPREpy:
 
         # CEA
         self.CEA = CEA(name=self.name)
+        #
+        self.dataframecea = None
+        #
         self.isp = None
         self.ivac = None
         self.gam = None
         self.p = None
         self.rho = None
-        self.M = None
+        self.Mach_number = None
         self.son = None
         self.vel = None
         self.T = None
@@ -90,7 +99,12 @@ class LPREpy:
         self.dc = self.dt * np.sqrt(self.acat)  # metros, diametro da parte cilindrica
         self.de = 2 * np.sqrt(Ae / np.pi)  # metros, diametro da saida
 
-    def Initial_Parameters(self, F, pc, aeat, acat, of, efi_cf=0.98, pe=None, lc=0):
+    def __M_dot(self):
+        self.M_dot_total = self.F/(self.isp[2]*9.80665)
+        self.M_dot_ox = (self.of/(self.of+1))*self.M_dot_total
+        self.M_dot_fuel = (1/(self.of+1))*self.M_dot_total
+
+    def Initial_Parameters(self, F, pc, aeat, acat, of, efi_cf=0.98, pe: "exit pressure" = None, lc=0):
         self.F = F
         self.pc = pc
         self.aeat = aeat
@@ -104,13 +118,17 @@ class LPREpy:
             self.pe = 0
             log.info("LPREpy: value of pe (exit pressure) parameter: {:.4f} Pa".format(self.pe))
         elif type(pe) is str:
-            if pe == 'CEA':
+            if pe.lower() == 'cea':
                 self.pe_condi = 'CEA'
+            elif pe.lower() == 'default':
+                self.pe_condi = 'default'
+                self.pe = 0
             else:
-                log.warning("LPREpy: In 'pe' parameter put 'CEA' or a user defined value or let unfilled.")
+                log.warning(
+                    "LPREpy: In 'pe' parameter put 'CEA' or 'default (vacuum) 'a user defined value or let unfilled.")
                 self.pe = 0
                 log.info("LPREpy: value of pe (exit pressure) parameter: {:.4f} Pa".format(self.pe))
-        elif (pe != 0) and ((type(pe) is float) or (type(pe) is int)):
+        elif (pe != 0) and (isinstance(pe, int) or isinstance(pe, float)):
             self.pe_condi = 'user'
             self.pe = pe
         else:
@@ -118,8 +136,10 @@ class LPREpy:
             self.pe = 0
             log.info("LPREpy: value of pe (exit pressure) parameter: {:.4f} Pa".format(self.pe))
 
-    def Input_Propellant_CEAconfig(self, oxi, fuel, frozen='no', freezing_point='exit', equilibrium='yes',
-                                   short='yes', include_acat='no', show_output_CEAfiles='no'):
+    def Input_Propellant_CEA_config(self, oxi, fuel, frozen='no', freezing_point='exit', equilibrium='yes',
+                                    short='yes', include_acat='no', show_output_CEAfiles='no'):
+        log.info("LPREpy: This method uses CEApy library, \nwhich for now is only available in windows systems :/")
+
         # using CEApy and configuring the analysis
         self.CEA.settings(frozen=frozen, freezing_point=freezing_point, equilibrium=equilibrium, short=short, )
         self.CEA.input_propellants(oxid=oxi, fuel=fuel)
@@ -138,19 +158,29 @@ class LPREpy:
 
         # running CEA and getting results
         self.CEA.run()
-        show_output_CEAfiles = show_output_CEAfiles.lower()
-        if show_output_CEAfiles == 'yes':
+        if show_output_CEAfiles.lower() == 'yes':
             self.CEA.show_out_file()
-        elif show_output_CEAfiles == 'no':
+        elif show_output_CEAfiles.lower() == 'no':
             pass
         else:
             log.warning("show_output_CEAfiles must be 'yes' or 'no'")
-        outcea = self.CEA.get_results('all', 'all')
+        # getting cea parameters
+        if include_acat == 'no':
+            outcea = self.CEA.get_results('all', 'all')
+        elif include_acat == 'yes':
+            outcea_acat = self.CEA.get_results('all', 'all')
+            outcea = outcea_acat.drop(0)
+            outcea = outcea.reset_index()
+        else:
+            log.warning("'include_acat' parameter must be 'yes' or 'no'. 'no' considered.")
+            outcea = self.CEA.get_results('all', 'all')
+
+
         if outcea is None:
             log.error("LPREpy: something went wrong, CEA analysis has empty results, analysis failed.")
         else:
-            outcea['isp'] = outcea['isp'] / 9.81
-            outcea['ivac'] = outcea['ivac'] / 9.81
+            outcea['isp'] = outcea['isp'] / 9.80665
+            outcea['ivac'] = outcea['ivac'] / 9.80665
             self.CEA.remove_analysis_file(name=self.name)
             self.isp = [outcea['isp'][0], outcea['isp'][1], outcea['isp'][2]]
             self.ivac = [outcea['ivac'][0], outcea['ivac'][1], outcea['ivac'][2]]
@@ -158,15 +188,60 @@ class LPREpy:
             self.p = [outcea['p'][0], outcea['p'][1], outcea['p'][2]] * 100000  # Pressao na saída
             self.gam = [outcea['gam'][0], outcea['gam'][1], outcea['gam'][2]]  # gamma na camara
             self.rho = [outcea['rho'][0], outcea['rho'][1], outcea['rho'][2]]
-            self.M = [outcea['mach'][0], outcea['mach'][1], outcea['mach'][2]]  # mach na saida
+            self.Mach_number = [outcea['mach'][0], outcea['mach'][1], outcea['mach'][2]]  # mach na saida
             self.son = [outcea['son'][0], outcea['son'][1], outcea['son'][2]]
-            self.vel = [self.M[0] * self.son[0], self.M[1] * self.son[1], self.M[2] * self.son[2]]
+            self.vel = [self.Mach_number[0] * self.son[0], self.Mach_number[1] * self.son[1], self.Mach_number[2] * self.son[2]]
+            #outcea['vel'] = self.vel  # velocity = sonic_velocity * mach_number
+            self.dataframecea = outcea
             # calculating dc, dt and de
             self.__CSA()
+            self.__M_dot()
             # mean values of gammas and at exit section
             self.gam_exit = self.gam[2]
             self.gam_log_mean = np.log(self.p[1] / self.p[2]) / np.log(self.rho[1] / self.rho[2])  # gam log mean
             self.gam_ari_mean = (self.gam[0] + self.gam[1] + self.gam[2]) / 3  # gam ari mean
+
+        # pass
+
+    def Input_CEA_parameters(self, cea: list, format_data: "Pandas_df df or list" = "Pandas"):
+        if format_data.lower() == 'pandas':
+            cea['isp'] = cea['isp'] / 9.80665
+            cea['ivac'] = cea['ivac'] / 9.80665
+            self.isp = [cea['isp'][0], cea['isp'][1], cea['isp'][2]]
+            self.ivac = [cea['ivac'][0], cea['ivac'][1], cea['ivac'][2]]
+            self.cf = [cea['cf'][0], cea['cf'][1], cea['cf'][2]]  # cf no nozzle
+            self.p = [cea['p'][0], cea['p'][1], cea['p'][2]] * 100000  # Pressao na saída
+            self.gam = [cea['gam'][0], cea['gam'][1], cea['gam'][2]]  # gamma na camara
+            self.rho = [cea['rho'][0], cea['rho'][1], cea['rho'][2]]
+            self.Mach_number = [cea['mach'][0], cea['mach'][1], cea['mach'][2]]  # mach na saida
+            self.son = [cea['son'][0], cea['son'][1], cea['son'][2]]
+        elif format_data.lower() == 'list':
+            # cea list: [isp, ivac,cf,p,gam,rho,M,son,vel]
+            self.isp = cea[0]
+            self.ivac = cea[1]
+            self.cf = cea[2]
+            self.p = cea[3] * 100000  # pressure
+            self.gam = cea[4]  # gamma
+            self.rho = cea[5]
+            self.Mach_number = cea[6]  # mach number
+            self.son = cea[7]
+        else:
+            log.error("LPREpy: 'format' parameter must be 'Pandas' (Pandas df result from CEA library)"
+                      "\nor list in shape: [[a(chamber), b(throat), c(exit)],[d, e, f],[g, h, i]...]\n"
+                      "sequence of list: [isp,isp_vac,cf,chamber_pressure,gamma,rho,Mach,son_vel,velocity]\n"
+                      "isp=[isp chamber,isp throat,isp exit], gamma =[gamma chamber, gamma throat, gamma exit], ...")
+            return 'error'
+        # relative velocity of combustion product gases
+        self.vel = [self.Mach_number[0] * self.son[0], self.Mach_number[1] * self.son[1], self.Mach_number[2] * self.son[2]]
+        cea['vel'] = self.vel
+        self.dataframecea = cea
+        # calculating dc, dt and de
+        self.__CSA()
+        self.__M_dot()
+        # mean values of gammas and at exit section
+        self.gam_exit = self.gam[2]  # nozzle exit section
+        self.gam_log_mean = np.log(self.p[1] / self.p[2]) / np.log(self.rho[1] / self.rho[2])  # gam log mean
+        self.gam_ari_mean = (self.gam[0] + self.gam[1] + self.gam[2]) / 3  # gam ari mean
 
     def Chamber_Profile(self, kappa=None, Lcarac=None, dc=None, dt=None):
         if kappa is None:
@@ -176,19 +251,26 @@ class LPREpy:
 
         if (Lcarac is None) and (self.Lcarac == 0):
             log.error("LPREpy: Lcarac need a value provided by the user or calculated by the injector functions")
+            return
+        elif isinstance(Lcarac, str):
+            log.error("LPREpy: Lcarac need a value provided by the user or calculated by the injector functions")
+            return
         elif (Lcarac is None) and (self.Lcarac != 0):
             log.info("LPREpy: value of characteristic length: {:.4f} m".format(self.Lcarac))
-        else:
+        elif (isinstance(Lcarac, float) or isinstance(Lcarac, int)) and Lcarac != 0:
             self.Lcarac = Lcarac
-            log.info("LPREpy: value of characteristic length: {:.4f} m".format(self.Lcarac))
+            log.info("LPREpy: new value of characteristic length: {:.4f} m".format(self.Lcarac))
+        else:
+            log.error("LPREpy: Lcarac need a value provided by the user or calculated by the injector functions")
+            return
 
         if dc is None:
-            log.info("LPREpy: Value of chamber diameter: {:.4f} mm".format(self.dc * 1000))
+            log.info("LPREpy: Value of chamber diameter: {:.4f} MM".format(self.dc * 1000))
         else:
             self.dc = dc
 
         if dt is None:
-            log.info("LPREpy: Value of throat diameter: {:.4f} mm".format(self.dt * 1000))
+            log.info("LPREpy: Value of throat diameter: {:.4f} MM".format(self.dt * 1000))
         else:
             self.dt = dt
 
@@ -214,12 +296,12 @@ class LPREpy:
             log.info("LPREpy: value of characteristic length: {:.4f} m".format(self.Lcarac))
 
         if dc is None:
-            log.info("LPREpy: Value of chamber diameter: {:.4f} mm".format(self.dc * 1000))
+            log.info("LPREpy: Value of chamber diameter: {:.4f} MM".format(self.dc * 1000))
         else:
             self.dc = dc
 
         if dt is None:
-            log.info("LPREpy: Value of throat diameter: {:.4f} mm".format(self.dt * 1000))
+            log.info("LPREpy: Value of throat diameter: {:.4f} MM".format(self.dt * 1000))
         else:
             self.dt = dt
 
@@ -276,7 +358,7 @@ class LPREpy:
                                                                                  Lcarac=self.Lcarac,
                                                                                  kappa=self.kappa,
                                                                                  gam=self.gam_main,
-                                                                                 Me=self.M[2],
+                                                                                 Me=self.Mach_number[2],
                                                                                  aeat=self.aeat,
                                                                                  dx=self.dx,
                                                                                  ite=self.ite,
@@ -287,7 +369,7 @@ class LPREpy:
         return self.axis_nozzle, self.profile_nozzle
 
     def Inner_Profile(self, kappa=None, Lcarac=None, dc=None, dt=None, gam=None, Tn=None,
-                      moccond='aeat', method='MOC', gam_cond='log_mean', uni='mm'):
+                      moccond='aeat', method='MOC', gam_cond='log_mean', uni='MM'):
         if kappa is None:
             log.info("LPREpy: Kappa parameter in default value: {:.2f}".format(self.kappa))
         else:
@@ -295,19 +377,22 @@ class LPREpy:
 
         if (Lcarac is None) and (self.Lcarac == 0):
             log.error("LPREpy: Lcarac need a value provided by the user or calculated by the injector functions")
-        elif (Lcarac is None) and (self.Lcarac != 0):
-            log.info("LPREpy: value of characteristic length: {:.4f} m".format(self.Lcarac))
-        else:
+            return 'error'
+        elif (isinstance(Lcarac, float) or isinstance(Lcarac, int)) and Lcarac != 0:
             self.Lcarac = Lcarac
             log.info("LPREpy: value of characteristic length: {:.4f} m".format(self.Lcarac))
+        else:
+            log.error("LPREpy: Lcarac need a value provided by the user or calculated by the injector functions")
+            log.info("LPREpy: Actual value of characteristic length: {:.4f} m".format(self.Lcarac))
+            return 'error'
 
         if dc is None:
-            log.info("LPREpy: Value of chamber diameter: {:.4f} mm".format(self.dc * 1000))
+            log.info("LPREpy: Value of chamber diameter: {:.4f} MM".format(self.dc * 1000))
         else:
             self.dc = dc
 
         if dt is None:
-            log.info("LPREpy: Value of throat diameter: {:.4f} mm".format(self.dt * 1000))
+            log.info("LPREpy: Value of throat diameter: {:.4f} MM".format(self.dt * 1000))
         else:
             self.dt = dt
 
@@ -366,7 +451,7 @@ class LPREpy:
 
         self.axis_inner_contour, self.profile_inner_contour = self.InnerContour.Inner_Profile(
             dc=self.dc, dt=self.dt, Lcarac=self.Lcarac, kappa=self.kappa,
-            gam=self.gam_main, Me=self.M[2], aeat=self.aeat, dx=self.dx,
+            gam=self.gam_main, Me=self.Mach_number[2], aeat=self.aeat, dx=self.dx,
             ite=self.ite, erro=self.error, Tn=self.Tn,
             method=self.method_nozzle, moccond=self.moccond,
             uni=self.geometry_length_unit
@@ -374,6 +459,59 @@ class LPREpy:
 
         return self.axis_inner_contour, self.profile_inner_contour
 
+    def Info_GeometricMassFlowParams(self):
+        log.info("\n\nLPREpy: Geometric and Mass Flow Parameters")
+        log.info("LPREpy: Engine: {}".format(self.name))
+        log.info("LPREpy: Pc: {:.2f} bar, F: {:2f} N, o/f: {:2f}".format(self.pc/100000, self.F, self.of))
+        log.info("LPREpy: aeat: {:.2f}, acat: {:.2f}, pe: {:.2f} bar".format(
+            self.aeat, self.acat, self.pe/100000))
+        log.info("LPREpy: dc: {:2f} mm, dt: {:2f} mm, de: {:.2f} mm".format(
+            self.dc*1000, self.dt*1000, self.de*1000
+        ))
+        log.info("LPREpy: m_dot_total: {:.2f} g/s, m_dot_ox: {:.2f} g/s, m_dot_fuel: {:.2f} g/s".format(
+            self.M_dot_total*1000, self.M_dot_ox*1000, self.M_dot_fuel*1000
+        ))
+
+    def Info_CEA_Results(self):
+        log.info("\n\nLPREpy: CEA Results")
+        log.info("index: 0-chamber, 1-throat, 2-exit section")
+        log.info(self.dataframecea)
+
+    def Get_results(self, diameters_Mflow: str='no'):
+        if diameters_Mflow.lower() == 'yes':
+            return [self.dc, self.dt, self.de, self.M_dot_total, self.M_dot_ox, self.M_dot_fuel]
+
+    def Get_CEA_data(self, parameters: str = 'all', section: str = 'all'):
+        all_cea_parameters = [
+            'p', 't', 'rho', 'h', 'u', 'g', 's', 'm', 'mw', 'cp', 'gam', 'son',  # thermo prop
+            'pipe', 'mach', 'aeat', 'cf', 'ivac', 'isp',  # rocket performance
+            'vis', 'cond', 'condfz', 'pran', 'pranfz',  # transport properties
+            '%f', 'o/f', 'phi,eq.ratio', 'r,eq.ratio']  # fuel-oxidant mixture parameters
+
+        sections = ['chamber', 'throat', 'exit', 'all']
+        if section not in sections:
+            log.error("LPREpy: 'section' parameter must be 'chamber', 'throat' or 'exit'")
+            return
+
+        if parameters.lower() == 'all':
+            if section.lower() == 'all':
+                return self.dataframecea
+            elif section.lower() == 'chamber':
+                return self.dataframecea.loc[0]
+            elif section.lower() == 'throat':
+                return self.dataframecea[1]
+            elif section.lower() == 'exit':
+                return self.dataframecea[2]
+
+        elif parameters.lower() in all_cea_parameters:
+            if section.lower() == 'all':
+                return self.dataframecea[parameters.lower()]
+            elif section.lower() == 'chamber':
+                return self.dataframecea[parameters.lower()][0]
+            elif section.lower() == 'throat':
+                return self.dataframecea[parameters.lower()][1]
+            else:
+                return self.dataframecea[parameters.lower()][2] #  exit
 
 class InnerProfile:
     def __init__(self):
@@ -647,7 +785,7 @@ class InnerProfile:
     def Chamber_Profile(self, dc, dt, Lcarac, kappa, dx, ite, erro):
         h, H, y, lc, lconv, lcil = self.Lc(dc, dt, Lcarac, kappa)  # always on meters
 
-        uni_c = 1000  # calculating in mm first
+        uni_c = 1000  # calculating in MM first
         # cylindrical profile
         eixo_lcil, perfil_lcil = self.cilinder((dc / 2) * uni_c, lcil * uni_c, dx)
         # R1 arc profile
@@ -779,16 +917,35 @@ class InnerProfile:
         h, H, y, lc, lconv, lcil = self.Lc(dc, dt, Lcarac, kappa)
 
         eixo_rn, perfil_rn = self.Arco_Rn(lc * 1000, dx, gam, Me, dt * 1000, Tn, ite, erro)
-        self.rn_axis, self.rn_profile = eixo_rn, perfil_rn
 
         if method == 'MOC':
             xmoc, ymoc, Aaeat_moc = self.MOC(gam, Me, dt * 1000, Tn, aeat, ite, moccond)
 
             ultimorn = eixo_rn[-1] + dx
-            xmoc2 = list(map(lambda x: x + ultimorn, xmoc))
-            self.div_axis, self.div_profile = xmoc2, ymoc
+            xmoc = list(map(lambda x: x + ultimorn, xmoc))
 
-            axis = eixo_rn + xmoc2
+            # correcting possible rn wrong height
+            rn_chamber_dif = abs(perfil_rn[0] - self.chamber_profile[-1])
+            # adjusting initial height of rn to height of rt, and final height of rn to initial height of the divergent
+            perfil_rn = list(map(lambda yi: yi - abs(rn_chamber_dif), perfil_rn))
+
+            # adjusting beginning of the moc curve with the final of rn curve
+            # inclination of rn curve
+            tan_teta = (perfil_rn[-1] - perfil_rn[-2]) / (eixo_rn[-1] - eixo_rn[-2])
+            # distance betwenn last y rn dot and first y moc dot
+            h = ymoc[0] - perfil_rn[-1]
+            # distance betwenn last x rn dot and first x moc dot
+            total_d = xmoc[0] - eixo_rn[-1]
+            # projection at x-axis of rn curve
+            d_proj_xrn = h / tan_teta
+            # distance to remove in xmoc
+            x_sub_moc = total_d - d_proj_xrn
+            # adjusting xmoc again
+            xmoc = [i - x_sub_moc for i in xmoc]
+
+            self.rn_axis, self.rn_profile = eixo_rn, perfil_rn
+            self.div_axis, self.div_profile = xmoc, ymoc
+            axis = eixo_rn + xmoc
             profile = perfil_rn + ymoc
             return axis, profile
 
@@ -799,19 +956,17 @@ class InnerProfile:
 
         axis_nozzle, profile_nozzle = self.Nozzle_Profile(dc, dt, Lcarac, kappa, gam, Me, aeat,
                                                           dx, ite, erro, Tn, moccond, method)
-        # correcting possible rn wrong height
-        rn_chamber_dif = abs(self.rn_profile[0] - self.chamber_profile[-1])
-        if rn_chamber_dif <= 0.001:
-            axis_contour, profile_contour = axis_chamber + axis_nozzle, profile_chamber + profile_nozzle
-        else:
-            # adjusting initial height of rn to height of rt, and final height of rn to initial height of the divergent
-            self.rn_profile = list(map(lambda x: x - abs(rn_chamber_dif), self.rn_profile))
-            axis_contour = self.chamber_axis + self.rn_axis + self.div_axis
-            profile_contour = self.chamber_profile + self.rn_profile + self.div_profile
 
-        # units, choosing profile units, first calculations always in 'mm'
+        axis_contour = axis_chamber + axis_nozzle
+        profile_contour = profile_chamber + profile_nozzle
+
+        if axis_contour[0] < 0:
+            diff = abs(axis_contour[0])
+            axis_contour = [i+diff for i in axis_contour]
+
+        # units, choosing profile units, first calculations always in 'MM'
         uni_c = 1
-        if uni == "mm":
+        if uni == "MM":
             uni_c = 1
         if uni == "m":
             uni_c = 0.001
@@ -820,96 +975,7 @@ class InnerProfile:
         if uni == "ft":
             uni_c = 0.00328084
 
-        for i in range(len(axis_contour)):
-            axis_contour[i] = axis_contour[i] * uni_c
-            profile_contour[i] = profile_contour[i] * uni_c
+        axis_contour = [i * uni_c for i in axis_contour]
+        profile_contour = [i * uni_c for i in profile_contour]
+
         return axis_contour, profile_contour
-
-
-class Lcarac:
-    def __int__(self, cea_p):
-        # constantes universais
-        self.R_uni = 8.314  # J/mol K   # universal constant of the perfect gases
-        # Parâmetros já fornecidos
-        self.Pc = 0                     # chamber pressure, Pa
-        # parametros do injetor
-        self.v_inj = 0                  # injection velocity of injector
-        # PARAMETROS CALCULADOS
-        self.gamma_c = cea_p[0]                # gamma in the combustion chamber
-        self.v_t = cea_p[1]                  # gas velocity at the throat
-        self.cp_c = cea_p[2]                   # specific heat at constant pressure of the combustion chamber
-        self.T_c = cea_p[3]                   # T_g, gas temperature
-        self.k_c = cea_p[4]                    # thermal conductivity of combustion chamber
-        self.pho_c = cea_p[5]                  # gas specific mass of combustion chamber
-        self.Ac = cea_p[6]                     # cross-sectional area of the combustion chamber
-        self.m_dot = cea_p[7]                  # mass flow in the combustion chamber
-        self.Pr = cea_p[8]                     # Prandtl number in the combustion chamber
-        # PARAMETROS NOVOS
-        self.pho_l = 0                  # liquid density
-        self.st = 0                     # superficial tension
-        self.vis_cin = 0                # cinematic viscosity                 #
-        self.Qb = 0                     # heat (enthalpy) of formation
-        self.Cv = 0                     # calorific power
-        self.T_s = 0                    # boiling temperature
-        self.mm = 0                     # molecular mass
-        self.R = self.R_uni/self.mm     # gas constant
-        self.wox = 0                    # oxygen concentration
-        self.rox = 0                    # mass oxygen of the mixture
-        # to be calculated
-        self.ro = 0                     # initial radius of the drop
-        self.smd = 0                    # Sauter mean diameter
-
-    def Dp(self, cond='L'):
-        cond = cond.lower()
-        if cond == 'l':
-            return 80*np.sqrt(10*self.Pc)
-        elif cond == 'g':
-            return 40*np.sqrt(10*self.Pc)
-        else:
-            return 80 * np.sqrt(10 * self.Pc)
-
-    def SMD(self):
-        dp = self.Dp()**(-0.4)
-        self.smd = 7.3*(self.st ** 0.6)*(self.vis_cin ** 0.2)*(self.m_dot ** 0.25)*dp
-        return self.smd
-
-    def Bt(self):
-        return self.cp_c * ((self.T_c - self.T_s) / self.Qb)
-
-    def B(self):
-        termo = (self.Cv*self.wox)/(self.rox*self.Qb)
-        return termo + self.Bt()
-
-    def Sr(self):
-        return (9*self.Pr)/(np.log(1+self.B()))
-
-    def Xo(self):
-        return self.v_inj/self.v_t
-
-    def E_star(self):
-        sr = self.Sr()
-        xo = self.Xo()
-        return (xo+0.3*sr)/(2+sr)
-
-    def l_star(self):
-        ro = self.SMD()/2
-
-        g_c = self.m_dot / self.Ac
-
-        termo1_gama = (self.gamma_c-1)/(self.gamma_c+1)
-
-        termo2_gama = (self.gamma_c+1)/(2*self.gamma_c-2)
-
-        termo3_gama = 2/(self.gamma_c+1)
-
-        termo1 = self.E_star() * (ro ** 2)
-
-        termo2 = g_c / (self.pho_c * np.sqrt(self.gamma_c * self.R * self.T_c))
-
-        termo3 = ((self.cp_c*self.pho_l) / self.k_c)
-
-        termo4 = np.sqrt(self.gamma_c*self.R*self.T_c)/np.log(1+self.B())
-
-        l_star = termo1 * ((termo3_gama + (termo2 ** 2) * termo1_gama) ** termo2_gama)*termo3*termo4
-
-        return l_star
